@@ -1,0 +1,41 @@
+# Runs the provided k6 performance test against the application, exactly as described in
+# STATEMENT.md. Triggered manually from the Actions tab.
+name: Performance test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build application
+        run: ./mvnw -B -q package -DskipTests
+
+      - name: Start mocks and metrics storage
+        run: |
+          docker compose up -d simulado influxdb
+          for i in $(seq 1 30); do curl -sf http://localhost:3001/product/1/similarids && break; sleep 2; done
+
+      - name: Start application
+        run: |
+          nohup java -jar target/similar-products-1.0.0.jar > app.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:5000/actuator/health && break; sleep 2; done
+          curl -sf http://localhost:5000/product/1/similar
+
+      - name: Run k6 performance test
+        run: docker compose run --rm k6 run scripts/test.js
+
+      - name: Application log
+        if: always()
+        run: tail -n 200 app.log
